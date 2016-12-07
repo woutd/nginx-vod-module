@@ -191,7 +191,6 @@ typedef struct {
 	uint64_t clip_start_time;
 	uint64_t segment_base_time;
 	adaptation_sets_t adaptation_sets;
-	uint32_t max_pts_delay;
 } write_period_context_t;
 
 typedef struct {
@@ -284,12 +283,13 @@ typedef struct {
 // fixed init mp4 atoms
 
 static const u_char ftyp_atom[] = {
-	0x00, 0x00, 0x00, 0x18,		// atom size
+	0x00, 0x00, 0x00, 0x1c,		// atom size
 	0x66, 0x74, 0x79, 0x70,		// ftyp
-	0x69, 0x73, 0x6f, 0x6d,		// major brand
+	0x69, 0x73, 0x6f, 0x35,		// major brand
 	0x00, 0x00, 0x00, 0x01,		// minor version
-	0x69, 0x73, 0x6f, 0x6d,		// compatible brand
-	0x61, 0x76, 0x63, 0x31,		// compatible brand
+	0x69, 0x73, 0x6f, 0x35,		// compatible brand
+	0x64, 0x61, 0x73, 0x68,		// compatible brand
+	0x6d, 0x73, 0x69, 0x78,		// compatible brand
 };
 
 static const u_char hdlr_video_atom[] = {
@@ -372,13 +372,12 @@ static const u_char fixed_stbl_atoms[] = {
 // fixed fragment atoms
 
 static const u_char styp_atom[] = {
-	0x00, 0x00, 0x00, 0x1c,		// atom size
+	0x00, 0x00, 0x00, 0x18,		// atom size
 	0x73, 0x74, 0x79, 0x70,		// styp
-	0x69, 0x73, 0x6f, 0x36,		// major brand
-	0x00, 0x00, 0x00, 0x01,		// minor version
-	0x69, 0x73, 0x6f, 0x6d,		// compatible brand
-	0x69, 0x73, 0x6f, 0x36,		// compatible brand
-	0x64, 0x61, 0x73, 0x68,		// compatible brand
+	0x6d, 0x73, 0x64, 0x68,		// major brand
+	0x00, 0x00, 0x00, 0x00,		// minor version
+	0x6d, 0x73, 0x64, 0x68,		// compatible brand
+	0x6d, 0x73, 0x69, 0x78,		// compatible brand
 };
 
 static dash_codec_info_t dash_codecs[VOD_CODEC_ID_COUNT] = {
@@ -452,8 +451,7 @@ dash_packager_get_track_spec(
 	media_set_t* media_set,
 	uint32_t sequence_index,
 	uint32_t track_index,
-	uint32_t media_type,
-	uint32_t pts_delay)
+	uint32_t media_type)
 {
 	u_char* p = result->data;
 
@@ -697,8 +695,7 @@ dash_packager_write_segment_list(
 		media_set,
 		sequence_index,
 		cur_track->index,
-		cur_track->media_info.media_type,
-		context->max_pts_delay - cur_track->media_info.u.video.initial_pts_delay);
+		cur_track->media_info.media_type);
 
 	// write the header
 	p = vod_sprintf(p,
@@ -948,8 +945,7 @@ dash_packager_write_mpd_period(
 				media_set,
 				sequence_index,
 				cur_track->index,
-				cur_track->media_info.media_type,
-				context->max_pts_delay - cur_track->media_info.u.video.initial_pts_delay);
+				cur_track->media_info.media_type);
 
 			if (representation_id.len > 0 && representation_id.data[representation_id.len - 1] == '-')
 			{
@@ -1039,8 +1035,7 @@ dash_packager_write_mpd_period(
 				media_set, 
 				cur_sequence->index, 
 				cur_track->index, 
-				cur_track->media_info.media_type,
-				context->max_pts_delay - cur_track->media_info.u.video.initial_pts_delay);
+				cur_track->media_info.media_type);
 
 			switch (media_type)
 			{
@@ -1304,7 +1299,6 @@ dash_packager_build_mpd(
 	write_period_context_t context;
 	adaptation_set_t* adaptation_set;
 	segmenter_conf_t* segmenter_conf = media_set->segmenter_conf;
-	media_track_t* cur_track;
 	vod_tm_t publish_time_gmt;
 	vod_tm_t avail_time_gmt;
 	vod_tm_t cur_time_gmt;
@@ -1335,21 +1329,6 @@ dash_packager_build_mpd(
 	if (rc != VOD_OK)
 	{
 		return rc;
-	}
-
-	// get the max pts delay of video tracks
-	context.max_pts_delay = 0;
-	for (cur_track = media_set->filtered_tracks; cur_track < media_set->filtered_tracks_end; cur_track++)
-	{
-		if (cur_track->media_info.media_type != MEDIA_TYPE_VIDEO)
-		{
-			continue;
-		}
-
-		if (cur_track->media_info.u.video.initial_pts_delay > context.max_pts_delay)
-		{
-			context.max_pts_delay = cur_track->media_info.u.video.initial_pts_delay;
-		}
 	}
 
 	// get segment durations and count for each media type
@@ -2456,7 +2435,8 @@ dash_packager_build_fragment_header(
 	p = mp4_builder_write_trun_atom(
 		p, 
 		sequence, 
-		first_frame_offset);
+		first_frame_offset,
+		1);
 
 	// moof.traf.xxx
 	if (extensions->write_extra_traf_atoms_callback != NULL)
