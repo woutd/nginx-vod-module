@@ -15,6 +15,8 @@
 #define PARSE_FILE_NAME_MULTI_STREAMS_PER_TYPE	(0x2)
 #define PARSE_FILE_NAME_ALLOW_CLIP_INDEX		(0x4)
 
+#define MAX_SMIL_FILE_SIZE 10240
+
 // macros
 #define ngx_http_vod_starts_with(start_pos, end_pos, prefix)	\
 	((end_pos) - (start_pos) >= (int)(prefix)->len && ngx_memcmp((start_pos), (prefix)->data, (prefix)->len) == 0)

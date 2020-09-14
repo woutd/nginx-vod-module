@@ -554,12 +554,132 @@ ngx_http_vod_parse_multi_uri(
 	u_char* last_comma_pos;
 	uint32_t part_index;
 
+	const u_char SMIL[5] = { '.', 's', 'm', 'i', 'l' };
+	ngx_str_t smil_path;
+	size_t root;
+	u_char* smil;
+	FILE *smil_fp;
+	size_t smil_file_size;
+
 	result->prefix.data = uri->data;
 	result->prefix.len = uri->len;
 	result->postfix.data = NULL;
 	result->postfix.len = 0;
 
-	if (uri->len < multi_uri_suffix->len ||
+	// check for wowza smil
+	if (uri->len > sizeof(SMIL) &&
+		ngx_memcmp(SMIL, uri->data + uri->len - sizeof(SMIL), sizeof(SMIL)) == 0)
+	{
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+			"ngx_http_vod_parse_multi_uri: wowza smil detected");
+
+		if (!ngx_http_map_uri_to_path(r, &smil_path, &root, 1))
+		{
+			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+				"ngx_http_vod_parse_multi_uri: could not map uri to path");
+			return NGX_HTTP_BAD_REQUEST;
+		}
+		for (cur_pos = smil_path.data + smil_path.len - 3; cur_pos > smil_path.data; cur_pos--)
+		{
+			if (*cur_pos == '/')
+			{
+				*cur_pos = '\0';
+				break;
+			}
+		}
+		smil_path.len = cur_pos - smil_path.data;
+		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+			"ngx_http_vod_parse_multi_uri: smil path: \"%s\"", smil_path.data);
+
+		smil = ngx_pcalloc(r->pool, MAX_SMIL_FILE_SIZE + 1); // no need to free, done by nginx
+		if (!smil)
+		{
+			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+				"ngx_http_vod_parse_multi_uri: could not allocate memory for reading smil file");
+			return NGX_HTTP_BAD_REQUEST;
+		}
+		cur_pos = smil;
+
+		smil_fp = fopen((char *)smil_path.data, "r");
+		if (!smil_fp)
+		{
+			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+				"ngx_http_vod_parse_multi_uri: could not open smil file");
+			return NGX_HTTP_NOT_FOUND;
+		}
+
+		smil_file_size = fread(smil, sizeof(u_char), MAX_SMIL_FILE_SIZE, smil_fp);
+		if (!smil_file_size)
+		{
+			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+				"ngx_http_vod_parse_multi_uri: could not read from smil file");
+			return NGX_HTTP_BAD_REQUEST;
+		}
+		fclose(smil_fp);
+
+		end_pos = cur_pos + smil_file_size;
+		*end_pos = '\0';
+
+		cur_pos = (u_char *)ngx_strstr(cur_pos, "src=\"");
+		part_index = 0;
+		while (cur_pos)
+		{
+			cur_pos = (u_char *)ngx_strchr(cur_pos, '"'); // find start of src
+			*cur_pos = '/';
+
+			last_comma_pos = (u_char *)ngx_strchr(cur_pos, '"'); // find end of src
+			if (last_comma_pos)
+			{
+				if (part_index >= MAX_SUB_URIS)
+				{
+					ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+						"ngx_http_vod_parse_multi_uri: number of src parts in smil exceeds the limit");
+					return NGX_HTTP_BAD_REQUEST;
+				}
+
+				*last_comma_pos = '\0';
+
+				ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+					"ngx_http_vod_parse_multi_uri: src found in smil: \"%s\"", cur_pos);
+
+				result->middle_parts[part_index].data = cur_pos;
+				result->middle_parts[part_index].len = last_comma_pos - cur_pos;
+
+				part_index++;
+			}
+
+			last_comma_pos++;
+			if (last_comma_pos < end_pos) {
+				cur_pos = (u_char *)ngx_strstr(last_comma_pos, "src=\"");
+			}
+		}
+
+		for (cur_pos = uri->data + uri->len - 1; cur_pos > uri->data; cur_pos--)
+		{
+			if (*cur_pos == '/')
+			{
+				break;
+			}
+		}
+		result->prefix.len = cur_pos - uri->data;
+
+		result->postfix.data = NULL;
+		result->postfix.len = 0;
+
+		if (part_index == 0)
+		{
+			result->middle_parts[0].data = NULL;
+			result->middle_parts[0].len = 0;
+			result->parts_count = 1;
+		}
+		else
+		{
+			result->parts_count = part_index;
+		}
+
+		return NGX_OK;
+	}
+	else if (uri->len < multi_uri_suffix->len ||
 		ngx_memcmp(multi_uri_suffix->data, uri->data + uri->len - multi_uri_suffix->len, multi_uri_suffix->len) != 0)
 	{
 		// not a multi uri
